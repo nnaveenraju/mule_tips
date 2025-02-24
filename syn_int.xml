@@ -1,0 +1,620 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:syncsystem="http://www.mulesoft.org/schema/mule/syncsystem" xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/syncsystem http://www.mulesoft.org/schema/mule/syncsystem/current/mule-syncsystem.xsd">
+
+	<flow name="dyn-syncsystem-orchestrator" doc:id="f5a81056-3817-4061-8bfe-b86724c9a8c0" >
+		<scheduler doc:name="Scheduler" doc:id="15f6f0a5-9a2d-4ce2-890b-497dbae6bd44" >
+			<scheduling-strategy >
+				<cron expression="0 0 0/1 1/1 * ? *" timeZone="America/New_York" />
+			</scheduling-strategy>
+		</scheduler>
+		<set-variable value="#['select Id, Name, DYNObject_Object__c, syncsystem_Object__c, Direction__c, Trigger_Type__c, Trigger_Condition__c, Endpoint_URL__c, Integration_Type__c, Soap_Object_Type__c, &#10;Eligible_for_Update__c, DWL_Script__c, SOAP_Search_DWL__c, Search_Results_Read_DWL__c, Parent_Object_External_ID__c, Child_Object_Name__c, &#10;Child_Object_External_ID_Field__c, Parent_Object_Update_DWL__c, Child_Object_Update_DWL__c, Log_Payload__c, Metadata_Type__c, &#10;Get_Additional_Delta_Items__c, Delta_Items_SOQL__c, Delta_SOQL_Metadata_DWL__c, Metadata_To_Get_Delta_Items__c, Delta_Items_SOQL_Results_DWL__c, Final_JSON_Payload_With_Deltas_DWL__c, Integration_Response_Parent_Field__c&#10;from ST_syncsystem_Integration__c WHERE Active__c = true ' ++ p('secure::syncsystem.pullDeployedOnly') ++ ' AND Direction__c = \'Outbound\' AND Trigger_Type__c = \'Scheduled Job\' ORDER BY Execution_Order__c']" doc:name="vars: intSOQL" doc:id="babad7ce-4704-4a1a-8838-4b8fb152eaad" variableName="intSOQL"/>
+		<salesforce:query doc:name="Query: ST_syncsystem_Integration__c" doc:id="e0a5b36a-75ed-47d1-98ac-01f66bf7182f" config-ref="Salesforce_Config">
+			<salesforce:salesforce-query ><![CDATA[#[vars.intSOQL]]]></salesforce:salesforce-query>
+		</salesforce:query>
+		<remove-variable doc:name="Remove Variable" doc:id="d89bfc77-aae9-4139-8144-c368da062149" variableName="intSOQL"/>
+		<foreach doc:name="For Each" doc:id="43805fe1-58db-48ae-abd9-4eb7ea61ca38" >
+			<try doc:name="Try" doc:id="97e26f64-ccac-433e-acf6-68f8d9d8ef8f" >
+				<logger level="INFO" doc:name="Logger" doc:id="187963c0-f5c7-445f-9e9f-42dce6beecbd" message="#[output application/json&#10;---&#10;{&#10;	statge: 'Start',&#10;	message: &quot;Process started for object: &quot; ++ (payload['Metadata_Type__c'] default '')&#10;}]" />
+				<ee:transform doc:name="Transform Message" doc:id="20e094c5-84b3-48a7-9505-0f4a8aaf824f">
+				<ee:message />
+				<ee:variables>
+					<ee:set-variable variableName="metadata"><![CDATA[%dw 2.0
+output application/java
+---
+{
+	soqlCondition: (payload['Trigger_Condition__c'] default ''),
+	syncsystemIntId: payload['Id'],
+	metadataType: (payload['Metadata_Type__c'] default ''),
+	apiEndpoint: payload['Endpoint_URL__c'],
+	integrationType: lower(payload['Integration_Type__c']),
+	soapObjectName: payload['Soap_Object_Type__c'],
+	dwlFileName: 'purchaseOrder.dwl',
+	dwlScript: payload['DWL_Script__c'],
+	soql: payload['SOQL__c'],
+	searchDWL: payload['SOAP_Search_DWL__c'],
+	searchResultsDWL: payload['Search_Results_Read_DWL__c'],
+	parentObject: payload['DYNObject_Object__c'],
+	parentObjectExternalId: payload['Parent_Object_External_ID__c'],
+	childObject: payload['Child_Object_Name__c'],
+	childObjectExternalId: payload['Child_Object_External_ID_Field__c'],
+	parentObjectUpdateDWL: payload['Parent_Object_Update_DWL__c'],
+	childObjectUpdateDWL: payload['Child_Object_Update_DWL__c'],
+	showPayload: payload['Log_Payload__c'],
+	//Additional Delta items
+	getAdditionalDeltaItems: payload['Get_Additional_Delta_Items__c'],
+	deltaSOQL: payload['Delta_Items_SOQL__c'], 
+	deltaMetadataDWL: payload['Delta_SOQL_Metadata_DWL__c'],	
+	metadataToGetDelta: payload['Metadata_To_Get_Delta_Items__c'],
+	deltaSOQLResultDWL: payload['Delta_Items_SOQL_Results_DWL__c'],
+	finalDWLWithDelta: payload['Final_JSON_Payload_With_Deltas_DWL__c'],
+	status: '',
+	noOfQueriedRecords: 0,
+	noOfSuccessRecords: 0,
+	noOfFailedRecords: 0,
+	integrationResponseField: payload['Integration_Response_Parent_Field__c'],
+	emailsubjectTitle: 'Processing stats for: ' ++ (payload['Name'] default ''),
+	emailBodydetail: 'Following are the processing stats for: ' ++ (payload['Name'] default ''),
+	integrationName: payload['Name'] default ''
+}
+
+]]></ee:set-variable>
+				</ee:variables>
+			</ee:transform>
+				<choice doc:name="Choice" doc:id="e3a42073-dc07-49a4-9c10-738b3a3d3619">
+				<when expression="#[!isEmpty(vars.metadata['soql'])]">
+					<flow-ref doc:name="execute-soql-flow" doc:id="65323d84-536e-4d53-9425-517ddd91121a" name="execute-soql-flow" />
+				</when>
+				<otherwise>
+					<flow-ref doc:name="dyn-syncsystem-sync" doc:id="e7d41a63-c45b-4c7d-9dea-c37816352cd6" name="dyn-syncsystem-sync" />
+				</otherwise>
+			</choice>
+				<logger level="INFO" doc:name="Logger" doc:id="8635dc01-9ba1-4f14-8cb0-c1e871e866a7" message="#[output application/json&#10;---&#10;{&#10;	statge: 'Completed',&#10;	message: &quot;Process completed for object: &quot; ++ (vars.metadata['integrationName'] default '')&#10;}]" />
+				<error-handler >
+					<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="68e4fbe4-b21f-45c7-92b8-423581c3d8ba" >
+						<logger level="INFO" doc:name="Logger" doc:id="0cd5ca2d-6d62-4b59-aee7-d7c691bff80a" message="#[output application/json&#10;---&#10;{&#10;	message: 'Failed in processing for object: ' ++ (vars.metadata['integrationName'] default ''),&#10;	errorDetails: error.description,&#10;	nextSteps: 'Moving on to process next object...'&#10;}]"/>
+					</on-error-continue>
+				</error-handler>
+			</try>
+		</foreach>
+	</flow>
+	<sub-flow name="dyn-syncsystem-sync" doc:id="7330d0f8-fe66-46ed-bd2a-e9631a3d61c4" >
+		<scatter-gather doc:name="Scatter-Gather" doc:id="aa8f8321-7671-4259-89b6-c81f058ff07a" >
+			<route >
+				<salesforce:query doc:name="Query: syncsystem Parent Mapping" doc:id="9640343c-5d5a-4146-9653-041c535b53ee" config-ref="Salesforce_Config" target="parentMapping">
+			<salesforce:salesforce-query><![CDATA[Select 
+DYNObject_Object__c, DYNObject_Field__c, syncsystem_Object__c, syncsystem_Field__c, Type__c, Static_Value__c, ST_Reference_Data_Key__c, Child_Relationship__c, Child_Record_List_Mapping_Key__c, CreatedDate, Is_Date_Field__c, Date_Format__c, Data_Type__c
+FROM ST_syncsystem_Integration_Parent_Mapping__c WHERE ST_syncsystem_Integration__c = ':syncsystemIntId' AND Active__c = true
+]]></salesforce:salesforce-query>
+			<salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"syncsystemIntId" : vars.metadata.syncsystemIntId
+}]]]></salesforce:parameters>
+		</salesforce:query>
+			</route>
+			<route >
+				<salesforce:query doc:name="Query: syncsystem Child Mapping" doc:id="52096ea4-2155-4b09-a397-a9047327cf90" config-ref="Salesforce_Config" target="childMapping">
+					<salesforce:salesforce-query ><![CDATA[Select 
+Child_Record_List_Mapping_Key__c, ST_Reference_Data_Key__c, syncsystem_Object__c, syncsystem_Field__c, Static_Value__c, DYNObject_Object__c, DYNObject_Field__c, Type__c, Is_Date_Field__c, Date_Format__c, Data_Type__c  
+FROM ST_syncsystem_Integration_Child_Mapping__c Where ST_syncsystem_Integration__c = ':syncsystemIntId' AND Active__c = true
+]]></salesforce:salesforce-query>
+					<salesforce:parameters ><![CDATA[#[output application/java
+---
+{
+	"syncsystemIntId" : vars.metadata.syncsystemIntId
+}]]]></salesforce:parameters>
+				</salesforce:query>
+			</route>
+		</scatter-gather>
+		<ee:transform doc:name="Transform Message" doc:id="c01d03de-1604-4ceb-b04f-5b7cae31e723" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="refDataKey" ><![CDATA[%dw 2.0
+output application/java
+
+var parentRefDataKey = vars.parentMapping filter ( !isEmpty($.ST_Reference_Data_Key__c)) map (parent, parentIndx) -> {
+	ref: '\'' ++ parent.ST_Reference_Data_Key__c++ '\''
+}
+
+var childRefDataKey = vars.childMapping filter ( !isEmpty($.ST_Reference_Data_Key__c)) map (child, childIndx) -> {
+	ref: '\'' ++ child.ST_Reference_Data_Key__c++ '\'' 	
+}
+
+---
+if (!isEmpty(parentRefDataKey) and !isEmpty(childRefDataKey)) '(' ++ ((parentRefDataKey ++ childRefDataKey).ref  joinBy ',') ++ ')'
+else if (!isEmpty(parentRefDataKey) and isEmpty(childRefDataKey)) '(' ++ (parentRefDataKey.ref  joinBy ',') ++ ')'
+else if (isEmpty(parentRefDataKey) and !isEmpty(childRefDataKey)) '(' ++ (childRefDataKey.ref  joinBy ',') ++ ')'
+else '']]></ee:set-variable>
+				<ee:set-variable variableName="refDataWithoutFormat" ><![CDATA[%dw 2.0
+output application/java
+
+var parentRefDataKey = vars.parentMapping filter ( !isEmpty($.ST_Reference_Data_Key__c)) map (parent, parentIndx) -> {
+	ref: parent.ST_Reference_Data_Key__c
+}
+
+var childRefDataKey = vars.childMapping filter ( !isEmpty($.ST_Reference_Data_Key__c)) map (child, childIndx) -> {
+	ref: child.ST_Reference_Data_Key__c
+}
+
+---
+if (!isEmpty(parentRefDataKey) and !isEmpty(childRefDataKey)) ((parentRefDataKey ++ childRefDataKey).ref  joinBy ',')
+else if (!isEmpty(parentRefDataKey) and isEmpty(childRefDataKey)) (parentRefDataKey.ref  joinBy ',')
+else if (isEmpty(parentRefDataKey) and !isEmpty(childRefDataKey)) (childRefDataKey.ref  joinBy ',')
+else '']]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<flow-ref doc:name="get-reference-data" doc:id="0a585fd0-83c1-4390-81ff-61b89d9c2fb7" name="get-reference-data" target="refDataMapped"/>
+		<ee:transform doc:name="Transform Message" doc:id="45f4eebd-c280-4d02-9b92-392e538f0dc6" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="soql" ><![CDATA[%dw 2.0
+output application/java
+
+var sourceObject = (vars.parentMapping filter ( !isEmpty($.DYNObject_Object__c)) map (so, soIndex) -> {
+    object: so.DYNObject_Object__c
+}).object
+
+var fields = (vars.parentMapping filter ( !isEmpty($.DYNObject_Field__c)) map ((item, index) -> {
+    sourceField: item.DYNObject_Field__c
+})).sourceField joinBy  ','
+
+
+var childSourceObject = (vars.childMapping filter ( !isEmpty($.DYNObject_Object__c)) map (so, soIndex) -> {
+    object: so.DYNObject_Object__c
+}).object
+
+var childFields = (vars.childMapping filter ( !isEmpty($.DYNObject_Field__c)) map ((item, index) -> {
+    sourceField: item.DYNObject_Field__c
+})).sourceField joinBy  ','
+
+var innerSoql = if (!isEmpty(childFields) and !isEmpty(childSourceObject)) 'SELECT ' ++ childFields ++ ' FROM ' ++ childSourceObject[0] else ''
+var soql = if (!isEmpty(fields) and !isEmpty(sourceObject)) ('SELECT ' ++ fields ++ (if (!isEmpty(innerSoql)) (', (' ++ innerSoql ++ ')') else '') ++ ' FROM ' ++ sourceObject[0] ++ ' ' ++ vars.metadata['soqlCondition'] ) else ''
+---
+soql]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<choice doc:name="Choice" doc:id="33abfe58-c984-407d-a5f7-bf62e0c0da3f" >
+			<when expression="#[isEmpty(vars.soql)]">
+				<raise-error doc:name="Raise error" doc:id="33ced416-1904-4bb4-bf07-1c3942692e96" type="ERROR:MAREKETORDER" description="Not able to form SOQL"/>
+			</when>
+			<otherwise >
+				<logger level="INFO" doc:name="Logger" doc:id="94eff25a-2074-499b-8935-3a8d3976b04e" message="#[vars.soql]"/>
+				<try doc:name="Try" doc:id="236d8071-60e7-46af-9e57-290788e95903" >
+					<salesforce:query doc:name="Query: Generated SOQL" doc:id="19100aaf-6968-4781-927e-fddaced1d7a2" config-ref="Salesforce_Config">
+					<salesforce:salesforce-query><![CDATA[#[vars.soql]]]></salesforce:salesforce-query>
+					<salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"id" : vars.sfId
+}]]]></salesforce:parameters>
+				</salesforce:query>
+					<error-handler >
+						<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="86927637-d135-4c83-bce5-2d1888592871" >
+							<logger level="INFO" doc:name="Logger" doc:id="4f3a87c5-c050-4a61-b758-d80d7016851e" message="#[output application/json&#10;---&#10;{&#10;	message: 'Failed in processing SOQL for object: ' ++ (vars.metadata['integrationName'] default ''),&#10;	errorDetails: error.description,&#10;	failingSOQL: vars.soql&#10;}]"/>
+						</on-error-propagate>
+					</error-handler>
+				</try>
+				<flow-ref doc:name="log-payload" doc:id="2f6fab9d-6e0b-42d9-b014-e1f8b4d125a0" name="log-payload" />
+				<choice doc:name="Choice" doc:id="0739ce68-d621-4db3-b18e-808157c1d247">
+					<when expression="#[vars.metadata['getAdditionalDeltaItems'] default false]">
+						<ee:dynamic-evaluate doc:name="Dynamic Evaluate" doc:id="437841fb-7992-483c-ab7c-04c6ed1381ef" expression="#[vars.metadata['metadataToGetDelta']]" target="deltaItemMetadata" />
+					</when>
+				</choice>
+				<ee:transform doc:name="Transform Message" doc:id="6e92d3ec-7493-46c9-8d58-22385be97aea" >
+					<ee:message >
+						<ee:set-payload ><![CDATA[%dw 2.0
+import * from dw::Runtime
+
+output application/json
+
+fun pathExtract(packet, pathArray, index) = if (sizeOf(pathArray) == (index + 1))
+    packet."$(pathArray[index])"
+    else pathExtract(packet."$(pathArray[index])",pathArray,(index+1))
+
+
+fun attemptDateParsing(d:String)=
+    (try(() -> d as Date {format: "MM-dd-yyyy"})  
+    orElseTry (() -> d as Date {format: "MM-dd-yy"}) 
+    orElseTry (() -> d as Date {format: "MM/dd/yyyy"}) 
+    orElseTry (() -> d as Date {format: "MM/dd/yy"}) 
+    orElseTry (() -> d as Date {format: "YYYY/MM/dd"}) 
+    orElseTry (() -> d as Date {format: "yyyy-MM-dd"}) 
+    orElseTry (() -> d as DateTime {format: "yyyy-MM-dd'T'HH:mm:ss"}) 
+    orElseTry (() -> d as DateTime {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}) 
+    orElseTry (() -> d as DateTime {format: "yyyy-MM-dd'T'HH:mm:ss.000Z"}) 
+    orElseTry (() -> d as DateTime {format: "yyyy-MM-dd'T'HH:mm:ss.SSSX"}) 
+    orElse (() -> ''))
+
+var childArrayObjectName = (vars.parentMapping filter (!isEmpty($.Child_Record_List_Mapping_Key__c) and !isEmpty($.Child_Relationship__c)) map (fld, fldInx) -> {
+    objectName: fld.syncsystem_Field__c
+})[0].objectName
+
+var childRelationshipName = (vars.parentMapping filter (!isEmpty($.Child_Record_List_Mapping_Key__c) and !isEmpty($.Child_Relationship__c)) map (fld, fldInx) -> {
+    objectName: fld.Child_Relationship__c
+})[0].objectName
+
+var fieldReferences = vars.parentMapping filter (!isEmpty($.DYNObject_Field__c)) map ((item, index) -> {
+    sourceField: item.DYNObject_Field__c,
+    (relatedField : (item.DYNObject_Field__c splitBy  '.')[0] ) if (item.DYNObject_Field__c contains '_r.'),
+    (relatedFieldName : (item.DYNObject_Field__c splitBy  '.')[1] ) if (item.DYNObject_Field__c contains '_r.'),
+    typeData: item.Type__c,
+    staticValue: item.Static_Value__c,
+    targetObject: item.syncsystem_Object__c,
+    targetField: item.syncsystem_Field__c,
+    refDataKey: item.ST_Reference_Data_Key__c,
+    isNSCustomField: item.isNSCustomField,
+    isDate: item.Is_Date_Field__c,
+    dateFormat: item.Date_Format__c,
+    dataType: item.Data_Type__c
+})
+
+var childFieldReferences = vars.childMapping filter (!isEmpty($.DYNObject_Field__c)) map ((item, index) -> {
+    sourceField: item.DYNObject_Field__c,
+    soruceObject: item.DYNObject_Object__c,
+    (relatedField : (item.DYNObject_Field__c splitBy  '.')[0] ) if (item.DYNObject_Field__c contains '_r.'),
+    (relatedFieldName : (item.DYNObject_Field__c splitBy  '.')[1] ) if (item.DYNObject_Field__c contains '_r.'),
+    typeData: item.Type__c,
+    staticValue: item.Static_Value__c,
+    targetObject: item.syncsystem_Object__c,
+    targetField: item.syncsystem_Field__c,
+    refDataKey: item.ST_Reference_Data_Key__c,
+    isNSCustomField: item.isNSCustomField,
+    isDate: item.Is_Date_Field__c,
+    dateFormat: item.Date_Format__c,
+    dataType: item.Data_Type__c
+})
+
+var staticChildCount = sizeOf(vars.childMapping)
+var staticValues =  vars.childMapping filter (isEmpty($.DYNObject_Field__c)) map ((item, index) -> {
+    (((item.syncsystem_Object__c): {
+        (item.syncsystem_Field__c): item.Static_Value__c
+    }) if (!isEmpty(item.syncsystem_Object__c))),
+    ((item.syncsystem_Field__c): item.Static_Value__c) if (isEmpty(item.syncsystem_Object__c))
+})
+
+var finalStaticValues = staticValues reduce ((item, accumulator) -> item ++ accumulator)
+
+var getChildStaticData = if (staticChildCount == 1) ({(vars.childMapping[0].syncsystem_Field__c): vars.childMapping[0].Static_Value__c}) else finalStaticValues
+
+fun isCustomField(fld) = ((fieldReferences filter ($.sourceField == fld) map ((item, index) -> {
+    target: item.isNSCustomField default false
+}))[0].target default '')
+
+fun getTargetField(ref, fld) = ((ref filter ($.sourceField == fld) map ((item, index) -> {
+    target: item.targetField
+}))[0].target default '')
+
+fun getRefDataKey(ref, fld) = ((ref filter ($.sourceField == fld) map ((item, index) -> {
+    target: item.refDataKey
+}))[0].target default '')
+
+fun getTargetType(ref, fld) = ((ref filter ($.sourceField == fld) map ((item, index) -> {
+    target: item.typeData
+}))[0].target default '')
+
+fun getChildTargetObject(fld) = ((childFieldReferences filter ($.sourceField == fld) map ((item, index) -> {
+    target: item.targetObject
+}))[0].target default '')
+
+fun getChildDataType(fld) = ((childFieldReferences filter ($.sourceField == fld) map ((item, index) -> {
+    target: item.dataType
+}))[0].target default '')
+
+fun getDataTypeRef(ref, fld) = ((ref filter ($.sourceField == fld) map ((item, index) -> {
+    target: item.dataType
+}))[0].target default '')
+
+fun getStaticValue(fld) = ((fieldReferences filter ($.sourceField == fld) map ((item, index) -> {
+    target: item.staticValue
+}))[0].target default '')
+
+fun isDateType(ref, fld) = ((ref filter ($.sourceField == fld and ($.isDate)) map ((item, index) -> {
+    target: (item.dateFormat default '')
+}))[0].target default '')
+
+
+var parentFields = (vars.parentMapping filter ( !isEmpty($.DYNObject_Field__c)) map ((item, index) -> {
+    sourceField: item.DYNObject_Field__c
+})).sourceField 
+
+var childFields = (vars.childMapping filter ( !isEmpty($.DYNObject_Field__c)) map ((item, index) -> {
+    sourceField: item.DYNObject_Field__c
+})).sourceField 
+
+fun getFieldName(data) = data mapObject ((value, key, index) -> {
+    'fieldName': key
+})
+
+fun getChildSourceObject(fld) = (childFieldReferences filter($.sourceField == fld) map (item, fldIndx) -> {
+    obj: item.soruceObject
+})[0].obj
+
+fun formatDate(ref, fld, dateValue) = attemptDateParsing(dateValue)  as String {format:isDateType(ref, fld)}
+
+fun formatData(ref, fld, data) =   if (!isEmpty(data)) (getDataTypeRef(ref, fld) match {
+    case y is 'Object' -> { 'Type': { 'OBJECT' : y} }
+    case y is 'String' -> data
+    case y is 'Number' -> data as Number
+    case y is 'Boolean' -> data as Boolean
+    else -> data
+  }) else data
+
+//fun getChildData(fld, data) = if(fld contains('_r.')) formatData(childFieldReferences, fld, data[((fld splitBy '.')[0])][((fld splitBy '.')[1])]) else formatData(childFieldReferences, fld, data[fld])
+fun getChildData(fld, data) = formatData(childFieldReferences, fld, pathExtract( data, fld splitBy  '.',0))
+
+fun getInternalId(ref, fld, data) =  if(isEmpty(getRefDataKey(ref, fld))) data 
+                                else (flatten(vars.refDataMapped[lower(getRefDataKey(ref, fld))]) filter($.value == data) map ((item, index) -> {
+                                        intId: item.internalId
+                                    }))[0].intId
+
+fun getChildInternalId(ref, fld, data) =  if(isEmpty(getRefDataKey(ref, fld))) (if (fld contains '_r.') (data[(fld splitBy  '.')[0]][(fld splitBy  '.')[1]]) else data)
+                                else (flatten(vars.refDataMapped[lower(getRefDataKey(ref, fld))]) filter($.value == data) map ((item, index) -> {
+                                        intId: item.internalId
+                                    }))[0].intId
+
+fun getRelatedField(ref, recItem, fld) = if(getTargetType(ref, fld) == 'Internal ID' and isEmpty(getRefDataKey(ref, fld))) 
+                                            pathExtract( recItem, fld splitBy  '.',0)
+                                    else if(getTargetType(ref, fld) == 'Internal ID' and !isEmpty(getRefDataKey(ref, fld))) 
+                                            if (sizeOf(fld splitBy('.')) > 1) getInternalId(fld, (pathExtract( recItem, fld splitBy  '.',0))) else ''
+                                    else pathExtract( recItem, fld splitBy  '.',0)
+
+fun parentMap(ref, data) = (parentFields map ((fld, fldIndex) -> {
+        (getTargetField(fieldReferences, fld)): if(fld contains('_r')) getRelatedField(ref, data, fld) 
+                                else if(getTargetType(ref, fld) == 'Internal ID') (getInternalId(ref, fld, data[fld] ) default '')
+                                else if(getTargetType(ref, fld) == 'External ID') data[fld] 
+                                else if(getTargetType(ref, fld) == 'Pass Through') (if (isEmpty(isDateType(ref, fld))) data[fld] else formatDate(ref, fld, data[fld]))
+                                else if(getTargetType(ref, fld) == 'Static') getStaticValue(fld)
+                                else ''    
+}) )
+
+
+fun childMappings(data) =  if (staticChildCount != 1) (data[childRelationshipName] map (childRec, childIndx) -> {
+     ((childFields map ((fld, fldIndex) -> {
+        (((getTargetField(childFieldReferences, fld)): if((fld contains('_r')) )  getRelatedField(childFieldReferences, childRec, fld)
+                                    else if(getTargetType(childFieldReferences, fld) == 'Internal ID') getChildInternalId(childFieldReferences, fld, childRec[fld])
+                                    else if(getTargetType(childFieldReferences, fld) == 'External ID') childRec
+                                    else if(getTargetType(childFieldReferences, fld) == 'Pass Through') (if (isEmpty(isDateType(childFieldReferences, fld))) (getChildData(fld, childRec)) else formatDate(childFieldReferences, fld, getChildData(fld, payload.payload[0][getChildSourceObject(fld)])))
+                                    else if(getTargetType(childFieldReferences, fld) == 'Static') getStaticValue(fld)
+                                    else ''  ) if (isEmpty(getChildTargetObject(fld)))),
+        ((getChildTargetObject(fld)): {
+            (getTargetField(childFieldReferences, fld)): if((fld contains('_r')) )  getRelatedField(childFieldReferences, childRec, fld)
+                                    else if(getTargetType(childFieldReferences, fld) == 'Internal ID') getChildInternalId(childFieldReferences, fld, childRec)
+                                    else if(getTargetType(childFieldReferences, fld) == 'External ID') childRec
+                                    else if(getTargetType(childFieldReferences, fld) == 'Pass Through') (if (isEmpty(isDateType(childFieldReferences, fld))) getChildData(childFieldReferences,fld, childRec) else formatDate(childFieldReferences, fld, getChildData(fld, childRec)))[0]
+                                    else if(getTargetType(childFieldReferences, fld) == 'Static') getStaticValue(fld)
+                                    else ''  }) if (!isEmpty(getChildTargetObject(fld)))
+        }) 
+    )),
+    (getChildStaticData)
+ }) else [finalStaticValues]
+
+fun preFinalPayload(data) = parentMap(fieldReferences, data) reduce ((item, accumulator) -> item ++ accumulator)
+
+---
+payload map (po, poIndex) -> {
+    (preFinalPayload(po) ++ {
+        (item: childMappings(po)) if (isEmpty(childArrayObjectName)),
+        (item: {
+            (childArrayObjectName): childMappings(po)
+        }) if (!isEmpty(childArrayObjectName))
+    })
+}]]></ee:set-payload>
+					</ee:message>
+					<ee:variables >
+						<ee:set-variable variableName="metadata" ><![CDATA[%dw 2.0
+output application/java
+---
+(vars.metadata - 'noOfQueriedRecords') ++ {
+	noOfQueriedRecords: sizeOf(payload)
+}
+]]></ee:set-variable>
+						<ee:set-variable variableName="removeVariables" ><![CDATA[%dw 2.0
+output application/java
+---
+'parentMapping,childMapping,refDataWithoutFormat,soql' splitBy ',']]></ee:set-variable>
+					</ee:variables>
+				</ee:transform>
+				<flow-ref doc:name="log-payload" doc:id="855024d2-75cb-4990-aa5e-b015f347d517" name="log-payload" />
+				<flow-ref doc:name="remove-variables" doc:id="0cea3690-08e4-4ea6-b0b0-ec1c46e59f4b" name="remove-variables" />
+				<choice doc:name="Choice" doc:id="7fe0ce2a-1e41-493b-8315-279339f9489c" >
+					<when expression="#[vars.metadata['integrationType'] == 'rest']">
+						<flow-ref doc:name="dyn-syncsystem-make-rest-calls" doc:id="a678d0af-4b0e-498f-bac0-199984521763" name="dyn-syncsystem-make-rest-calls"/>
+					</when>
+					<when expression="#[vars.metadata['integrationType'] == 'soap']">
+						<flow-ref doc:name="dyn-syncsystem-make-soap-calls" doc:id="b506e08d-e28c-4839-9893-dedda2fd4dbc" name="dyn-syncsystem-make-soap-calls"/>
+					</when>
+				</choice>
+			</otherwise>
+		</choice>
+	</sub-flow>
+	
+	<sub-flow name="dyn-syncsystem-make-rest-calls" doc:id="4499626a-1a71-45ea-8990-70117b0dc968" >
+		<logger level="INFO" doc:name="Logger" doc:id="e9388aeb-a055-405f-b1db-052b26ab324c" message="REST API call."/>
+		<foreach doc:name="For Each" doc:id="a242a8a3-5f89-475e-80b9-45786238d6a9">
+					<set-variable value="#[payload.externalid]" doc:name="sfId" doc:id="d08b4ba1-6b98-43b5-9911-cf0e02d932d4" variableName="sfId" />
+			<try doc:name="Try" doc:id="59dccd75-c558-4c1c-9086-155c1ef4d816">
+						<http:request method="POST" doc:name="Request" doc:id="e8c7bcf2-2532-4790-80eb-dd6715647441" config-ref="HTTPs_Request_NS_Config" url="#[vars.metadata.apiEndpoint]">
+					<http:headers><![CDATA[#[output application/java
+---
+{
+	"Authorization" : vars.oAuth
+}]]]></http:headers>
+				</http:request>
+						<error-handler>
+						<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="b131fd57-4c2c-4b84-ad29-d3fffd4d36d7">
+							<logger level="INFO" doc:name="Logger" doc:id="4df7fe4e-1bfc-4c97-a5e2-3858f82f78c4" message="#[output application/json&#10;---&#10;payload]" />
+						</on-error-continue>
+					</error-handler>
+				</try>
+					<logger level="INFO" doc:name="Logger" doc:id="78265788-1cb6-4404-a5ad-68fca3984892" message="#[output application/json&#10;---&#10;payload]" />
+				</foreach>
+	</sub-flow>
+	<sub-flow name="dyn-syncsystem-make-soap-calls" doc:id="f36f01ee-5fdf-4f90-bb15-d910ecb033aa" >
+		<logger level="INFO" doc:name="Logger" doc:id="8312f250-cb60-4ea4-8ae6-e47123a83557" message='#[output application/json&#10;---&#10;{&#10;	sfId: vars.sfId,&#10;	message: "Initiating SOAP API call....."&#10;}]'/>
+		<ee:transform doc:name="vars" doc:id="0e616cab-8be4-47d0-b14a-d098e6c6efd7" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="integrationResponses" ><![CDATA[%dw 2.0
+output application/java
+---
+[]]]></ee:set-variable>
+				<ee:set-variable variableName="requestPayload" ><![CDATA[%dw 2.0
+output application/java
+---
+'']]></ee:set-variable>
+				<ee:set-variable variableName="parentUpdateData" ><![CDATA[%dw 2.0
+output application/java
+---
+[]]]></ee:set-variable>
+				<ee:set-variable variableName="childUpdateData" ><![CDATA[%dw 2.0
+output application/java
+---
+[]]]></ee:set-variable>
+				<ee:set-variable variableName="final_intgration_response" ><![CDATA[%dw 2.0
+output application/java
+---
+[]]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<foreach doc:name="For Each" doc:id="c5156ac6-f129-4c1c-9dd6-bfb6940e196f">
+							<set-variable value="#[payload.externalid]" doc:name="sfId" doc:id="c31194e9-3c6b-4ed6-af14-2097c1374361" variableName="sfId" />
+			<choice doc:name="Choice" doc:id="d2ad6f96-a1d9-4dbd-b337-be90444b6db1" >
+				<when expression="#[vars.metadata['getAdditionalDeltaItems'] default false]">
+					<logger level="INFO" doc:name="Logger" doc:id="b6d40334-d877-489b-a437-99caf46481e2" message='#[output application/json&#10;---&#10;{&#10;	sfId: vars.sfId,&#10;	message: "Delta Items to be fetched.. processing the request....."&#10;}]'/>
+					<ee:dynamic-evaluate doc:name="Dynamic Evaluate: DeltaMetada" doc:id="e51c11dd-6ed0-4099-8f01-ec83bdb1619a" expression="#[vars.metadata['deltaMetadataDWL']]" target="deltaMetadataSoql"/>
+					<choice doc:name="Choice" doc:id="e7b6d696-4026-44c0-995a-2789a985a052">
+						<when expression="#[!(isEmpty(vars.deltaMetadataSoql['phase']))]">
+							<ee:dynamic-evaluate doc:name="Dynamic Evaluate: Generate Delta SOQL" doc:id="a8666207-7f03-4ef3-b3c1-749c0834f69f" expression="#[vars.metadata['deltaSOQL']]" target="deltaSoqlGenerated" />
+							<logger level="INFO" doc:name="Logger" doc:id="1e60423f-2d4b-4762-96c8-03671a529391" message="#[vars.deltaSoqlGenerated]" />
+							<choice doc:name="Choice" doc:id="12073324-b80d-4574-b605-09e8bc4c8291">
+						<when expression="#[!isEmpty(vars.deltaSoqlGenerated)]">
+							<try doc:name="Try" doc:id="a869b932-456a-4ff7-a306-ef834db24eaa">
+										<salesforce:query doc:name="Query delta SOQL" doc:id="5a8aa2d5-4e8d-4ade-b960-0f1c92a768ac" config-ref="Salesforce_Config" target="deltaItemsResults">
+								<salesforce:salesforce-query><![CDATA[#[vars.deltaSoqlGenerated]]]></salesforce:salesforce-query>
+							</salesforce:query>
+										<error-handler>
+											<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="5c32bad8-12f0-4811-a854-c58dd111f832">
+												<logger level="INFO" doc:name="Logger" doc:id="56ac87ae-73ab-4735-aa93-ed42c31859c4" message="#[output application/json&#10;---&#10;{&#10;	message: 'Failed in processing Delta SOQL for object: ' ++ (vars.metadata['integrationName'] default ''),&#10;	errorDetails: error.description,&#10;	failingSOQL: vars.deltaSoqlGenerated&#10;}]" />
+											</on-error-propagate>
+										</error-handler>
+									</try>
+									<choice doc:name="Choice" doc:id="8c9dc6ae-b2c8-4bbd-ae5d-cb4d9879e434">
+										<when expression="#[!(isEmpty(vars.deltaItemsResults))]">
+											<ee:dynamic-evaluate doc:name="Dynamic Evaluate" doc:id="d9d91b2a-68ee-49ba-85f8-bb81e42c3206" expression="#[vars.metadata['deltaSOQLResultDWL']]" target="deltaSOQLResults" />
+											<ee:dynamic-evaluate doc:name="Dynamic Evaluate" doc:id="136715b5-c656-4c6d-bf26-5c19b8530be6" expression="#[vars.metadata['finalDWLWithDelta']]" />
+										</when>
+										<otherwise >
+											<logger level="INFO" doc:name="Logger" doc:id="9aa9b51f-a530-45d5-93fa-7249301742f5" message='#[output application/json&#10;---&#10;{&#10;	sfId: vars.sfId,&#10;	message: "No Delta SOQL results found....."&#10;}]'/>
+										</otherwise>
+									</choice>
+						</when>
+						<otherwise>
+							<logger level="INFO" doc:name="Logger" doc:id="90977ae3-134e-4245-b346-bfbcccb1190e" message='#[output application/json&#10;---&#10;{&#10;	sfId: vars.sfId,&#10;	message: "No Delta SOQL Generated....."&#10;}]' />
+						</otherwise>
+					</choice>
+						</when>
+					</choice>
+				</when>
+			</choice>
+			<try doc:name="Try" doc:id="60f8d26a-3ffd-467e-89af-e3a3d04e10ba">
+				<flow-ref doc:name="dyn-syncsystem-soap-call" doc:id="fea0e3a8-5a8e-4807-953b-f8644ee8b24e" name="dyn-syncsystem-soap-call" />
+								<error-handler>
+									<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="3414f741-6bf1-4fc5-837c-9b6fbef32ed0">
+										<logger level="INFO" doc:name="Logger" doc:id="d1a1c096-71ab-4489-bf4b-d63c987041dc" message="#[output application/json&#10;---&#10;error.detailedDescription]" />
+						<ee:transform doc:name="Transform Message" doc:id="7703fa88-51c9-486a-88c7-07165509d3c3" >
+							<ee:message >
+							</ee:message>
+							<ee:variables >
+								<ee:set-variable variableName="errorMessage" ><![CDATA[%dw 2.0
+output application/java
+---
+error.description]]></ee:set-variable>
+							</ee:variables>
+						</ee:transform>
+						<ee:transform doc:name="integrationResponses" doc:id="1a3dd23e-994b-49a6-8043-24d01355b59f" >
+							<ee:message >
+							</ee:message>
+							<ee:variables >
+								<ee:set-variable variableName="integrationResponses" ><![CDATA[%dw 2.0
+output application/java
+---
+vars.integrationResponses ++ [{
+	Name: vars.metadata['integrationName'] ++ ' :' ++ vars.sfId,
+	(vars.metadata['integrationResponseField']): vars.sfId,
+	Operation__c: "Add",
+	Request_Payload__c: write(vars.requestPayload,"application/xml"),
+	Response_Payload__c: vars.errorMessage,
+	Status__c: "Fail"	
+}]
+]]></ee:set-variable>
+							</ee:variables>
+						</ee:transform>
+						<flow-ref doc:name="update-st-objects-with-failed-status" doc:id="9d274223-48ac-4586-a301-6d47ccc59554" name="update-st-objects-with-failed-status"/>
+									</on-error-continue>
+								</error-handler>
+							</try>
+						</foreach>
+		<flow-ref doc:name="integration-responses-log" doc:id="adaeca36-773b-430a-be5f-c3b5fe87dcd1" name="integration-responses-log"/>
+		<try doc:name="Try" doc:id="291fae5e-8893-4bb3-904f-b17448181567" >
+			<choice doc:name="Choice" doc:id="cf4a3233-0ad6-48bd-bb97-4eb45cc68a8a">
+			<when expression="#[!isEmpty(vars.parentUpdateData)]">
+				<flow-ref doc:name="update-parent-data" doc:id="35f1156a-b56f-47ff-bc8b-4b38b00f4cd3" name="update-parent-data" />
+			</when>
+		</choice>
+			<choice doc:name="Choice" doc:id="28778d01-5979-40da-bd3a-19c928aece05">
+			<when expression="#[!isEmpty(vars.childUpdateData)]">
+				<flow-ref doc:name="update-child-data" doc:id="9a5dbc23-357a-462b-8f64-2009427c52f1" name="update-child-data" />
+			</when>
+		</choice>
+			<error-handler >
+				<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="923f3565-1eac-46b0-8d69-d91c4e1da0ca" >
+					<logger level="INFO" doc:name="Logger" doc:id="77abc55b-462b-4b5f-8f5e-61e5470200b0" message="#[output application/json&#10;---&#10;{&#10;	message: 'Failed in upserting NS info into ST objects: ' ++ (vars.metadata['integrationName'] default ''),&#10;	errorDetails: error.description&#10;}]"/>
+					<ee:transform doc:name="Transform Message" doc:id="e1d96de9-9442-407e-89c9-57883766401d" >
+						<ee:message >
+						</ee:message>
+						<ee:variables >
+							<ee:set-variable variableName="integrationResponses" ><![CDATA[%dw 2.0
+output application/java
+---
+vars.integrationResponses ++ [{
+	recordInfo: vars.metadata['metadataType'],
+	operation: '',
+	Status__c: 'Fail',
+	errorMessage: error.description
+}]]]></ee:set-variable>
+						</ee:variables>
+					</ee:transform>
+				</on-error-continue>
+			</error-handler>
+		</try>
+		<ee:transform doc:name="vars.final_intgration_response" doc:id="08b6f06e-2012-4ecd-8bc1-64ba05f97cf0" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="final_intgration_response" ><![CDATA[%dw 2.0
+output application/java
+---
+vars.integrationResponses map (resp, respIndx) -> {
+	recordInfo: resp.Name,
+	operation: resp.Operation__c,
+	Status__c: resp.Status__c,
+	errorMessage: if (resp.Status__c == 'Fail') 
+					resp.Response_Payload__c
+				else ''
+}]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<flow-ref doc:name="email_generation" doc:id="cb97759d-00a0-468b-a5e4-465550ff92b4" name="email_generation" />
+	</sub-flow>
+	
+</mule>
