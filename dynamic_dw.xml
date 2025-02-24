@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+	xmlns:syncsystem="http://www.mulesoft.org/schema/mule/syncsystem"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+						http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+						http://www.mulesoft.org/schema/mule/syncsystem http://www.mulesoft.org/schema/mule/syncsystem/current/mule-syncsystem.xsd
+						http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd">
+	<sub-flow name="dyn-syncsystem-soap-call" doc:id="1f2138a7-ab67-472c-b54f-f6dda73a9982">
+		<flow-ref doc:name="log-payload" doc:id="38d4c6f3-3e30-4775-a6df-b878e6cfbb70"
+			name="log-payload" />
+		<ee:dynamic-evaluate doc:name="Dynamic Evaluate: dwlScript"
+			doc:id="cb57ac05-a4c1-415a-8bb2-87f82352bcd6" expression="#[vars.metadata.dwlScript]" />
+		<flow-ref doc:name="log-payload" doc:id="a77c796f-7592-40ce-845d-096061fac09e"
+			name="log-payload" />
+		<ee:transform doc:name="variables" doc:id="94aa25f3-a1df-4446-9770-d5065c4db181">
+			<ee:message>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="errorAndContinue"><![CDATA[%dw 2.0
+output application/java
+---
+false]]></ee:set-variable>
+				<ee:set-variable variableName="fetchedData"><![CDATA[%dw 2.0
+output application/java
+---
+false]]></ee:set-variable>
+				<ee:set-variable variableName="requestPayload"><![CDATA[%dw 2.0
+output application/xml
+---
+payload]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<try doc:name="Try" doc:id="81ec3e4d-a172-4268-a60a-1661a9e3660c">
+			<syncsystem:add doc:name="Add" doc:id="ec15f43d-ec49-44bd-a23c-0f087fbc911f"
+				config-ref="syncsystem_Config" type="#[vars.metadata.soapObjectName]" />
+			<flow-ref doc:name="log-payload" doc:id="4f16496b-1715-4eb3-9cfa-2e0384036eee"
+				name="log-payload" />
+			<ee:transform doc:name="Transform Message" doc:id="a520c770-2f6b-4630-8630-21ea249d05f3">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json writeAttributes=true
+---
+{
+internalId: payload.addResponse.writeResponse.baseRef.@internalId
+}]]></ee:set-payload>
+				</ee:message>
+				<ee:variables>
+					<ee:set-variable variableName="processStatus"><![CDATA[%dw 2.0
+output application/java
+---
+'Success']]></ee:set-variable>
+					<ee:set-variable variableName="integrationResponses"><![CDATA[%dw 2.0
+output application/java
+
+fun getResponse(data) = if (typeOf(data) ~= "Binary") {} 
+						else if (typeOf(data) ~= "Object") data
+						else {}
+---
+vars.integrationResponses ++ [{
+	Name: vars.metadata['metadataType'] ++ ' :' ++ vars.sfId,
+	(vars.metadata['integrationResponseField']): vars.sfId,
+	Operation__c: "Add",
+	//Request_Payload__c: ( if (sizeOf(write(getResponse(vars.requestPayload), 'application/xml')) < 131072) write(getResponse(vars.requestPayload), 'application/xml') else 'syncsystem response is too large to display.') else '',
+	Request_Payload__c: write(vars.requestPayload,"application/xml"),
+	Response_Payload__c: write(payload,"application/xml"),
+	Status__c: "Success"	
+}]
+]]></ee:set-variable>
+				</ee:variables>
+			</ee:transform>
+			<flow-ref doc:name="log-payload" doc:id="3bdaed03-ebab-49ce-b06d-0019fed5c3ad"
+				name="log-payload" />
+			<error-handler>
+				<on-error-continue enableNotifications="true" logException="true"
+					doc:name="On Error Continue" doc:id="ed261a0c-41ca-4145-b17d-d8c3681f3c25"
+					type="syncsystem:syncsystem_ERROR">
+					<set-variable value="true" doc:name="vars: errorAndContinue"
+						doc:id="87dce6f4-4015-4515-81d9-1b2c259cbe37"
+						variableName="errorAndContinue" />
+					<choice doc:name="Choice" doc:id="e7a66680-d212-49a4-bb2a-30122fece888">
+						<when
+							expression="#[lower(error.description default '') contains 'dup_rcrd']">
+							<logger level="INFO"
+								doc:name="Logger: Duplicate record: Get the internal Id"
+								doc:id="4064cbaf-2ec5-47f5-994c-9652dab406e5"
+								message="#[output application/json&#10;---&#10;{&#10;	sfId: vars.sfId,&#10;	integrating: vars.metadata['integrationName'],&#10;	message: &quot;Duplicate error.. trying to get the internal ID of the record..&quot;&#10;}]" />
+							<try doc:name="Try" doc:id="f4fbc084-6640-4a4f-b1bd-4ea2d995313f">
+								<set-variable value="#[true]" doc:name="vars:fetchedData"
+									doc:id="a6ab15f0-8b3a-4aa0-9b9f-ca3dbdfef37a"
+									variableName="fetchedData" />
+								<flow-ref doc:name="read-data-using-soap-apis"
+									doc:id="6ae26279-2846-4379-87b1-cd3f25f741cb"
+									name="read-data-using-soap-apis" />
+								<error-handler>
+									<on-error-propagate enableNotifications="true"
+										logException="true" doc:name="On Error Propagate"
+										doc:id="23fc39e7-37cf-4d32-b9c9-56b05a855c08">
+										<logger level="INFO" doc:name="Logger"
+											doc:id="372c57f3-c14b-49dc-b17a-74f6770177c7" />
+									</on-error-propagate>
+								</error-handler>
+							</try>
+							<ee:transform doc:name="vars: processStatus"
+								doc:id="cfbcf135-5491-427f-90e5-109691cbecd2">
+								<ee:message />
+								<ee:variables>
+									<ee:set-variable variableName="processStatus"><![CDATA[%dw 2.0
+output application/java
+---
+'Success']]></ee:set-variable>
+								</ee:variables>
+							</ee:transform>
+							<ee:transform doc:name="vars. integrationResponses"
+								doc:id="4f8aacf4-558c-4c17-b235-0aa63ed6681a">
+								<ee:message>
+								</ee:message>
+								<ee:variables>
+									<ee:set-variable variableName="integrationResponses"><![CDATA[%dw 2.0
+output application/java
+
+fun getResponse(data) = if (typeOf(data) ~= "Binary") {} 
+						else if (typeOf(data) ~= "Object") data
+						else {}
+---
+vars.integrationResponses ++ [{
+	Name: vars.metadata['metadataType'] ++ ' :' ++ vars.sfId,
+	(vars.metadata['integrationResponseField']): vars.sfId,
+	Operation__c: "Add",
+	//Request_Payload__c: ( if (sizeOf(write(getResponse(vars.requestPayload), 'application/xml')) < 131072) write(getResponse(vars.requestPayload), 'application/xml') else 'syncsystem response is too large to display.') else '',
+	Request_Payload__c: write(vars.requestPayload,"application/xml"),
+	Response_Payload__c: 'Duplicate Record... fetching the NS ID..',
+	Status__c: "Success"	
+}]
+]]></ee:set-variable>
+								</ee:variables>
+							</ee:transform>
+						</when>
+						<otherwise>
+							<logger level="INFO" doc:name="Logger"
+								doc:id="753a7cc2-d169-477b-9876-cfff69a25308"
+								message="#[output application/json&#10;---&#10;{&#10;	sfId: vars.sfId,&#10;	integrating: vars.metadata['integrationName'],&#10;	message: &quot;Not a Duplicate error.. Error details..: &quot; ++ (error.description default '')&#10;}]" />
+							<raise-error doc:name="Raise error"
+								doc:id="9e6cb080-ada1-4f74-8db3-5f08e8260b5d" type="ERROR:NOTDUPE"
+								description="#['Error details: $(error.description)' ]" />
+						</otherwise>
+					</choice>
+				</on-error-continue>
+				<on-error-propagate enableNotifications="true" logException="true"
+					doc:name="On Error Propagate" doc:id="e5d0a37d-dde3-4fa7-99c8-d0d6a267f6fa">
+					<logger level="INFO" doc:name="Logger: Error Desc"
+						doc:id="0944c6b3-21c4-45d3-a330-3e28a5fd7e2d"
+						message="#[output application/json&#10;---&#10;{&#10;	sfId: vars.sfId,&#10;	integrating: vars.metadata['integrationName'],&#10;	message: &quot;Other NS error.. Error details..: &quot; ++ (error.description default '')&#10;}]" />
+				</on-error-propagate>
+			</error-handler>
+		</try>
+		<logger level="INFO" doc:name="Logger" doc:id="b62b2d3b-6c58-4018-ad46-ba23e07c6c84"
+			message="#[payload]" />
+		<choice doc:name="Choice" doc:id="7ece579c-c2f1-4fde-9209-b104625ba846">
+			<when expression="#[!isEmpty(vars.metadata['parentObject'])]">
+				<ee:dynamic-evaluate doc:name="Dynamic Evaluate: parentObjectUpdateDWL"
+					doc:id="3a255bfe-7e0a-4fee-bed4-047111a8d566"
+					expression="#[vars.metadata['parentObjectUpdateDWL']]" target="parentData" />
+				<ee:transform doc:name="vars parentUpdateData"
+					doc:id="92694280-2df4-437a-87e0-00d79be5e503">
+					<ee:message>
+					</ee:message>
+					<ee:variables>
+						<ee:set-variable variableName="parentUpdateData"><![CDATA[%dw 2.0
+output application/java
+---
+vars.parentUpdateData ++ vars.parentData]]></ee:set-variable>
+					</ee:variables>
+				</ee:transform>
+			</when>
+		</choice>
+		<choice doc:name="Choice" doc:id="6f98f28e-292b-42a3-bd78-c11e59d30e1b">
+			<when expression="#[!isEmpty(vars.metadata['childObject'])]">
+				<choice doc:name="Choice" doc:id="498b5b40-45fa-4437-842f-877b8850d496">
+					<when expression="#[!(vars.fetchedData)]">
+						<flow-ref doc:name="read-data-using-soap-apis"
+							doc:id="dbfc79b2-5884-4b1b-956d-6e303a405535"
+							name="read-data-using-soap-apis" />
+					</when>
+				</choice>
+				<ee:dynamic-evaluate doc:name="Dynamic Evaluate: childObjectUpdateDWL"
+					doc:id="02039031-a12a-4b0b-a7e2-fb881cbde06c"
+					expression="#[vars.metadata['childObjectUpdateDWL']]" target="childData" />
+				<ee:transform doc:name="vars childUpdateData"
+					doc:id="c92a72d4-8eed-4f81-a16a-51313162978a">
+					<ee:message />
+					<ee:variables>
+						<ee:set-variable variableName="childUpdateData"><![CDATA[%dw 2.0
+output application/java
+---
+vars.childUpdateData ++ vars.childData]]></ee:set-variable>
+					</ee:variables>
+				</ee:transform>
+			</when>
+		</choice>
+		<logger level="INFO" doc:name="Logger" doc:id="d1b77a12-3d8f-45f5-9ab6-3b5dd763a361"
+			message="Completed Processing for : #[vars.sfId]" />
+	</sub-flow>
+	<sub-flow name="update-st-objects-with-failed-status"
+		doc:id="60578462-fc5c-40c8-b81a-8745a72d19fe">
+		<ee:transform doc:name="Failure payload for SF"
+			doc:id="f112c5dd-d5c1-441f-be63-6d097e5f1a0c">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+[{
+	id: vars.sfId,
+	Integration_Status__c: 'Fail',
+	Integration_Message__c: vars.errorMessage
+}]]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<ee:transform doc:name="vars parentUpdateData" doc:id="52d93d9d-d139-4750-bf4e-fe994003b6c7">
+			<ee:message />
+			<ee:variables>
+				<ee:set-variable variableName="parentUpdateData"><![CDATA[%dw 2.0
+output application/java
+---
+vars.parentUpdateData ++ payload]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+	</sub-flow>
+	<sub-flow name="log-payload" doc:id="b2aa49c8-3e7f-49e6-9bb6-5c709c22b9f2">
+		<choice doc:name="Choice" doc:id="3c4917c3-9bd3-449b-8871-072070724a07">
+			<when
+				expression="#[(vars.metadata['showPayload'] default false) and (lower((payload.^).mediaType) contains '/json')]">
+				<logger level="INFO" doc:name="Logger" doc:id="f12c6a12-0d6f-4ddd-91e9-543aae384bef"
+					message="#[output application/json&#10;var mediaType = (payload.^).mediaType&#10;---&#10;{&#10;	sfId: vars.sfId,&#10;	integrating: vars.metadata['integrationName'],&#10;	message: mediaType ++ ' payload',&#10;	payloadToLog: payload&#10;}]" />
+			</when>
+			<when
+				expression="#[(vars.metadata['showPayload'] default false) and (lower((payload.^).mediaType) contains '/xml')]">
+				<logger level="INFO" doc:name="Logger" doc:id="05e668e5-225e-407e-8360-2b9027fac105"
+					message="#[output application/xml&#10;var mediaType = (payload.^).mediaType&#10;---&#10; logDetails: {&#10;	sfId: vars.sfId,&#10;	integrating: vars.metadata['integrationName'],&#10;	message: mediaType ++ ' payload',&#10;	payloadToLog: payload&#10;}]" />
+			</when>
+			<when
+				expression="#[(vars.metadata['showPayload'] default false) and (!(lower((payload.^).mediaType) contains '/xml') or !(lower((payload.^).mediaType) contains '/json'))]">
+				<logger level="INFO" doc:name="Logger" doc:id="e8302cfe-074a-4eba-8357-81c7695e8bf4"
+					message="#[output application/json&#10;var mediaType = (payload.^).mediaType&#10;---&#10;{&#10;	sfId: vars.sfId,&#10;	integrating: vars.metadata['integrationName'],&#10;	message: mediaType ++ ' payload',&#10;	payloadToLog: payload&#10;}]" />
+			</when>
+		</choice>
+	</sub-flow>
+
+</mule>
